@@ -215,7 +215,7 @@ venv = Venv(
         ),
         Venv(
             name="appsec_iast_packages",
-            pys=["3.11", "3.12", "3.13", "3.14"],
+            pys=["3.11", "3.12", "3.13", "3.14", "3.15"],
             command="pytest -n auto {cmdargs}  -vvv -rxf tests/appsec/iast_packages/",
             pkgs={
                 "requests": latest,
@@ -2179,7 +2179,7 @@ venv = Venv(
                     },
                 ),
                 Venv(
-                    pys="3.14",
+                    pys=["3.14", "3.15"],
                     pkgs={
                         "grpcio": ">=1.75.0",
                     },
@@ -3750,9 +3750,9 @@ venv = Venv(
                         ),
                     ],
                 ),
-                # Python 3.14 - protobuf 4.22.0 is not compatible (TypeError: Metaclasses with custom tp_new)
+                # Python 3.14+ - protobuf 4.22.0 is not compatible (TypeError: Metaclasses with custom tp_new)
                 Venv(
-                    pys="3.14",
+                    pys=["3.14", "3.15"],
                     pkgs={"uwsgi": latest},
                     venvs=[
                         Venv(
@@ -4324,7 +4324,7 @@ venv = Venv(
                     },
                 ),
                 Venv(
-                    pys=["3.10", "3.14"],
+                    pys=["3.10", "3.14", "3.15"],
                     pkgs={
                         "tornado": "~=6.5",
                     },
@@ -4359,7 +4359,7 @@ venv = Venv(
                     },
                 ),
                 Venv(
-                    pys=["3.10", "3.14"],
+                    pys=["3.10", "3.14", "3.15"],
                     pkgs={
                         "tornado": "~=6.5",
                     },
@@ -4372,7 +4372,6 @@ venv = Venv(
             pkgs={
                 "requests": latest,
                 "httpx": latest,
-                "tornado": "~=6.5",
             },
             env={
                 "DD_TRACE_AGENT_URL": "http://testagent:9126",
@@ -4382,7 +4381,14 @@ venv = Venv(
                 "DD_API_SECURITY_SAMPLE_DELAY": "0",
                 "DD_PATCH_MODULES": "unittest:false",
             },
-            pys=["3.10", "3.14"],
+            venvs=[
+                Venv(
+                    pys=["3.10", "3.14", "3.15"],
+                    pkgs={
+                        "tornado": "~=6.5",
+                    },
+                ),
+            ],
         ),
         Venv(
             name="appsec_iast_native",
