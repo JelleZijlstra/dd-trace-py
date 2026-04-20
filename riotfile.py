@@ -15,7 +15,6 @@ SUPPORTED_PYTHON_VERSIONS: list[tuple[int, int]] = [
     (3, 12),
     (3, 13),
     (3, 14),
-    (3, 15),
 ]
 
 
@@ -73,9 +72,9 @@ def select_pys(min_version: str = MIN_PYTHON_VERSION, max_version: str = MAX_PYT
     """Helper to select python versions from the list of versions we support
 
     >>> select_pys()
-    ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
+    ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
     >>> select_pys(min_version='3')
-    ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
+    ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
     >>> select_pys(max_version='3')
     []
     >>> select_pys(min_version='3.9', max_version='3.10')
@@ -221,7 +220,7 @@ venv = Venv(
         ),
         Venv(
             name="appsec_iast_packages",
-            pys=["3.11", "3.12", "3.13", "3.14", "3.15"],
+            pys=["3.11", "3.12", "3.13", "3.14"],
             command="pytest -n auto {cmdargs}  -vvv -rxf tests/appsec/iast_packages/",
             pkgs={
                 "requests": latest,
@@ -584,7 +583,11 @@ venv = Venv(
                     pys=select_pys(min_version="3.9", max_version="3.11"),
                 ),
                 Venv(
-                    pys=select_pys(min_version="3.12"),
+                    # AIDEV-NOTE: 3.15 explicitly opted in (not yet in
+                    # SUPPORTED_PYTHON_VERSIONS). Crashtracker native code is
+                    # validated on 3.15 via the PyFrame_GetBack guard; see
+                    # releasenotes/notes/profiling-python315-support-*.yaml.
+                    pys=select_pys(min_version="3.12") + ["3.15"],
                     env={
                         "PYTHONWARNINGS": "ignore:.*fork.*:DeprecationWarning::",
                     },
@@ -2185,7 +2188,7 @@ venv = Venv(
                     },
                 ),
                 Venv(
-                    pys=["3.14", "3.15"],
+                    pys="3.14",
                     pkgs={
                         "grpcio": ">=1.75.0",
                     },
@@ -3802,7 +3805,11 @@ venv = Venv(
                 Venv(
                     name="profile-memalloc",
                     command="python -m tests.profiling.run pytest -v --no-cov --capture=no --benchmark-disable {cmdargs} tests/profiling/collector/test_memalloc.py tests/profiling/test_memalloc_fork.py",  # noqa: E501
-                    pys=select_pys(),
+                    # AIDEV-NOTE: 3.15 explicitly opted in — the profiler's
+                    # memalloc path is validated on 3.15 alongside the native
+                    # profiling_native CI matrix. See
+                    # releasenotes/notes/profiling-python315-support-*.yaml.
+                    pys=select_pys() + ["3.15"],
                     env={
                         "DD_PROFILING_MEMALLOC_ASSERT_ON_REENTRY": "1",
                         # standard allocators
@@ -4330,7 +4337,7 @@ venv = Venv(
                     },
                 ),
                 Venv(
-                    pys=["3.10", "3.14", "3.15"],
+                    pys=["3.10", "3.14"],
                     pkgs={
                         "tornado": "~=6.5",
                     },
@@ -4365,7 +4372,7 @@ venv = Venv(
                     },
                 ),
                 Venv(
-                    pys=["3.10", "3.14", "3.15"],
+                    pys=["3.10", "3.14"],
                     pkgs={
                         "tornado": "~=6.5",
                     },
@@ -4389,7 +4396,7 @@ venv = Venv(
             },
             venvs=[
                 Venv(
-                    pys=["3.10", "3.14", "3.15"],
+                    pys=["3.10", "3.14"],
                     pkgs={
                         "tornado": "~=6.5",
                     },
