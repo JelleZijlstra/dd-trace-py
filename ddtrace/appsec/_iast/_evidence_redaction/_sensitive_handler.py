@@ -264,6 +264,8 @@ class SensitiveHandler:
 
                     entries = self._remove(next_sensitive, next_tainted)
                     next_sensitive = entries[0] if entries else None
+                    for extra in entries[1:]:
+                        sensitive.insert(0, extra)
 
                 if source_index < len(sources):
                     if not sources[source_index].redacted and self.is_sensible_source(sources[source_index]):
@@ -314,6 +316,8 @@ class SensitiveHandler:
 
                     entries = self._remove(next_sensitive, next_tainted)
                     next_sensitive = entries[0] if entries else None
+                    for extra in entries[1:]:
+                        sensitive.insert(0, extra)
 
                 length = next_sensitive["end"] - next_sensitive["start"]
                 self.write_redacted_value_part(value_parts, length)
