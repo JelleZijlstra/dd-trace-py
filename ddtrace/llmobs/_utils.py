@@ -14,6 +14,7 @@ from typing import Union
 from typing import cast
 
 from ddtrace import config
+from ddtrace.constants import ERROR_TYPE
 from ddtrace.ext import SpanTypes
 from ddtrace.ext import git as _git
 from ddtrace.ext.ci import _filter_sensitive_info
@@ -27,7 +28,9 @@ from ddtrace.llmobs._constants import INTERNAL_QUERY_VARIABLE_KEYS
 from ddtrace.llmobs._constants import LLMOBS_STRUCT
 from ddtrace.llmobs._constants import ML_APP
 from ddtrace.llmobs._constants import ML_APP_DEFAULT
+from ddtrace.llmobs._constants import ROOT_PARENT_ID
 from ddtrace.llmobs._constants import SESSION_ID
+from ddtrace.llmobs._constants import LLMObsExportMode
 from ddtrace.llmobs.types import Document
 from ddtrace.llmobs.types import Message
 from ddtrace.llmobs.types import Prompt
@@ -41,6 +44,7 @@ from ddtrace.trace import Span
 
 if TYPE_CHECKING:
     from ddtrace.llmobs._writer import LLMObsSpanData
+    from ddtrace.llmobs._writer import LLMObsSpanEvent
 
 
 log = get_logger(__name__)
@@ -796,3 +800,68 @@ class LinkTracker:
         since output guardrails are only linked to the last LLM span for a particular agent.
         """
         self._last_llm_span = None
+
+
+def llmobs_span_event_tags(span: Span, export_mode: LLMObsExportMode) -> list[str]:
+    """Format LLMObs intake tags from span meta_struct and APM error fields."""
+    tags = dict(get_llmobs_tags(span) or {})
+
+    if export_mode != LLMObsExportMode.APM_AGENTLESS:
+        tags["error"] = str(span.error)
+        err_type = span.get_tag(ERROR_TYPE)
+        if err_type:
+            tags["error_type"] = err_type
+
+    return sorted("{}:{}".format(k, v) for k, v in tags.items())
+
+
+def assemble_llmobs_span_event(span: Span, export_mode: LLMObsExportMode) -> Optional["LLMObsSpanEvent"]:
+    """Assemble the LLMObs span event from finalized meta_struct on the span.
+
+    All preparation must already have been committed by ``_prepare_llmobs_span_data``.
+    """
+    llmobs_data = _get_llmobs_data_metastruct(span)
+    if not llmobs_data:
+        return None
+
+    parent_id = llmobs_data.get(LLMOBS_STRUCT.PARENT_ID) or ROOT_PARENT_ID
+    llmobs_trace_id = llmobs_data.get(LLMOBS_STRUCT.TRACE_ID)
+    if llmobs_trace_id is None:
+        raise ValueError("Failed to extract LLMObs trace ID from span context.")
+
+    meta = llmobs_data.get(LLMOBS_STRUCT.META) or _Meta()
+    metrics = llmobs_data.get(LLMOBS_STRUCT.METRICS) or {}
+    tags = llmobs_span_event_tags(span, export_mode)
+    formatted_trace_id = format_trace_id(span.trace_id)
+    _dd_attrs = {
+        **(llmobs_data.get("_dd") or {}),
+        "span_id": str(span.span_id),
+        "trace_id": formatted_trace_id,
+        "apm_trace_id": formatted_trace_id,
+    }
+
+    llmobs_span_event = {
+        "trace_id": llmobs_trace_id,
+        "span_id": str(span.span_id),
+        "parent_id": parent_id,
+        "name": get_llmobs_span_name(span) or span.name,
+        "start_ns": span.start_ns,
+        "duration": cast(int, span.duration_ns),
+        "status": "error" if span.error else "ok",
+        "meta": meta,
+        "metrics": metrics,
+        "tags": tags,
+        "_dd": _dd_attrs,
+    }
+
+    experiment_config = llmobs_data.get(LLMOBS_STRUCT.CONFIG)
+    if experiment_config:
+        llmobs_span_event["config"] = experiment_config
+    session_id = get_llmobs_session_id(span)
+    if session_id:
+        llmobs_span_event["session_id"] = session_id
+    span_links = get_llmobs_span_links(span) or []
+    if span_links:
+        llmobs_span_event["span_links"] = span_links
+
+    return cast("LLMObsSpanEvent", llmobs_span_event)

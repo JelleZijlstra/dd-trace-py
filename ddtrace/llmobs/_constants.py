@@ -5,23 +5,19 @@ from typing import Final
 class LLMObsExportMode(str, Enum):
     """How LLMObs span data is submitted to Datadog.
 
-    LLMOBS_DIRECT   — span events go through LLMObsSpanWriter directly. Selected when
-                      DD_APM_TRACING_ENABLED=false (APM trace is dropped by
-                      APMTracingEnabledFilter).
+    LLMOBS_DIRECT   — payload is staged on meta_struct["_llmobs"] at span finish;
+                      ``LLMObsTraceProcessor`` assembles and submits via LLMObsSpanWriter
+                      (APM trace dropped when DD_APM_TRACING_ENABLED=false).
     APM_AGENTLESS   — payload rides the APM trace as meta_struct["_llmobs"]; APM
                       writer is swapped to AgentlessTraceWriter (POSTs to /v1/input).
     APM_AGENT_PROXY — payload rides the APM trace as meta_struct["_llmobs"] via the
-                      Datadog Agent (/api/v0.2/traces). On predicted-drop traces the
-                      ``LLMObsSamplingFallbackProcessor`` re-ships the cached event via
-                      LLMObsSpanWriter to avoid data loss.
+                      Datadog Agent (/api/v0.2/traces). On predicted-drop traces
+                      ``LLMObsTraceProcessor`` re-ships via LLMObsSpanWriter.
     """
 
     LLMOBS_DIRECT = "llmobs_direct"
     APM_AGENTLESS = "apm_agentless"
     APM_AGENT_PROXY = "apm_agent"
-
-
-CACHED_LLMOBS_EVENT_CTX_KEY = "_llmobs.cached_event"
 
 
 SESSION_ID = "_ml_obs.session_id"

@@ -18,7 +18,6 @@ import urllib.parse
 import ddtrace
 from ddtrace import config
 from ddtrace import patch
-from ddtrace._trace.apm_filter import APMTracingEnabledFilter
 from ddtrace._trace.context import Context
 from ddtrace._trace.processor import _NoopTraceProcessor
 from ddtrace._trace.span import Span
@@ -49,7 +48,6 @@ from ddtrace.internal.utils.formats import format_trace_id
 from ddtrace.internal.utils.formats import parse_tags_str
 from ddtrace.llmobs import _telemetry as telemetry
 from ddtrace.llmobs._constants import ANNOTATIONS_CONTEXT_ID
-from ddtrace.llmobs._constants import CACHED_LLMOBS_EVENT_CTX_KEY
 from ddtrace.llmobs._constants import CLAUDE_AGENT_SDK_APM_SPAN_NAME
 from ddtrace.llmobs._constants import CREWAI_APM_SPAN_NAME
 from ddtrace.llmobs._constants import DEFAULT_PROJECT_NAME
@@ -75,7 +73,6 @@ from ddtrace.llmobs._constants import INSTRUMENTATION_METHOD_ANNOTATED
 from ddtrace.llmobs._constants import LANGCHAIN_APM_SPAN_NAME
 from ddtrace.llmobs._constants import LITELLM_APM_SPAN_NAME
 from ddtrace.llmobs._constants import LLMOBS_STRUCT
-from ddtrace.llmobs._constants import LLMOBS_SUBMITTED_TAG_KEY
 from ddtrace.llmobs._constants import ML_APP
 from ddtrace.llmobs._constants import PROMPT_TRACKING_INSTRUMENTATION_METHOD
 from ddtrace.llmobs._constants import PROPAGATED_LLMOBS_TRACE_ID_KEY
@@ -130,7 +127,7 @@ from ddtrace.llmobs._prompt_optimization import validate_test_dataset
 from ddtrace.llmobs._prompts import ManagedPrompt
 from ddtrace.llmobs._prompts.cache import WarmCache
 from ddtrace.llmobs._prompts.manager import PromptManager
-from ddtrace.llmobs._sampling_fallback_processor import LLMObsSamplingFallbackProcessor
+from ddtrace.llmobs._trace_processor import LLMObsTraceProcessor
 from ddtrace.llmobs._utils import AnnotationContext
 from ddtrace.llmobs._utils import LinkTracker
 from ddtrace.llmobs._utils import _annotate_llmobs_span_data
@@ -141,13 +138,11 @@ from ddtrace.llmobs._utils import _normalize_wire_trace_id_to_hex
 from ddtrace.llmobs._utils import _trace_id_to_wire
 from ddtrace.llmobs._utils import _validate_prompt
 from ddtrace.llmobs._utils import add_span_link
+from ddtrace.llmobs._utils import assemble_llmobs_span_event
 from ddtrace.llmobs._utils import enforce_message_role
 from ddtrace.llmobs._utils import get_asyncio
 from ddtrace.llmobs._utils import get_llmobs_ml_app
-from ddtrace.llmobs._utils import get_llmobs_session_id
 from ddtrace.llmobs._utils import get_llmobs_span_kind
-from ddtrace.llmobs._utils import get_llmobs_span_links
-from ddtrace.llmobs._utils import get_llmobs_span_name
 from ddtrace.llmobs._utils import get_llmobs_tags
 from ddtrace.llmobs._utils import get_llmobs_trace_id
 from ddtrace.llmobs._utils import resolve_llmobs_git_metadata
@@ -414,7 +409,7 @@ def _normalize_llmobs_meta(
     output_type: Literal["value", "messages", "documents", ""],
     export_to_llmobs: bool,
 ) -> None:
-    """Normalize the llmobs meta dict in place so `_llmobs_span_event()` can read it directly.
+    """Normalize the llmobs meta dict in place so ``assemble_llmobs_span_event`` can read it directly.
 
     Writes post-user-processor I/O back, inherits parent prompts for LLM spans, drops
     invalid prompts, populates the error field, normalizes model_provider, and removes
@@ -498,7 +493,7 @@ class LLMObs(Service):
         self._llmobs_context_provider = LLMObsContextProvider()
         self._user_span_processor = span_processor
         if not asbool(_env.get("DD_APM_TRACING_ENABLED", "true")):
-            # APMTracingEnabledFilter drops every trace, so the APM path can't carry data.
+            # LLMObsTraceProcessor drops every APM trace, so the APM path can't carry data.
             self._export_mode = LLMObsExportMode.LLMOBS_DIRECT
         elif llmobs_apm_trace_agentless_enabled():
             self._export_mode = LLMObsExportMode.APM_AGENTLESS
@@ -551,39 +546,23 @@ class LLMObs(Service):
         if span_kind == "llm":
             core.dispatch(DISPATCH_ON_LLM_SPAN_FINISH, (span,))
 
-        span_event = None
         try:
-            if self._prepare_llmobs_span_data(span, span_kind):
-                span_event = self._llmobs_span_event(span)
+            if not self._prepare_llmobs_span_data(span, span_kind):
+                span._remove_struct_tag(LLMOBS_STRUCT.KEY)
+                return
         except (KeyError, TypeError, ValueError):
             log.error(
-                "Error generating LLMObs span event for span %s, likely due to malformed span",
+                "Error preparing LLMObs span data for span %s, likely due to malformed span",
                 span,
                 exc_info=True,
             )
-
-        if not span_event:
-            # clear meta_struct if no event to export (dropped by user processor / error during preparation/assembly)
             span._remove_struct_tag(LLMOBS_STRUCT.KEY)
             return
 
         if self._evaluator_runner and span_kind == "llm":
-            self._evaluator_runner.enqueue(span_event, span)
-
-        if self._export_mode == LLMObsExportMode.LLMOBS_DIRECT or not self.tracer.enabled:
-            # APM trace is dropped (APMTracingEnabledFilter) or the tracer's on_span_finish
-            # path early-returns, so the rescue chain never runs — ship via the writer here.
-            # Tag + scrub before enqueue: a writer failure must not leave the payload on the
-            # span (would cause APM-side extract to duplicate).
-            span.set_tag(LLMOBS_SUBMITTED_TAG_KEY, "1")
-            span._remove_struct_tag(LLMOBS_STRUCT.KEY)
-            self._llmobs_span_writer.enqueue(span_event)
-            return
-
-        # APM_AGENT_PROXY / APM_AGENTLESS: payload rides the APM trace via meta_struct.
-        # Cache the rendered event so LLMObsSamplingFallbackProcessor can re-ship it without
-        # rebuilding when the SDK predicts the trace will be dropped.
-        span._set_ctx_item(CACHED_LLMOBS_EVENT_CTX_KEY, span_event)
+            span_event = assemble_llmobs_span_event(span, self._export_mode)
+            if span_event:
+                self._evaluator_runner.enqueue(span_event, span)
 
     def _apply_user_span_processor(self, span: Span, llmobs_span: LLMObsSpan) -> Optional[LLMObsSpan]:
         """Run the user span processor.
@@ -663,67 +642,8 @@ class LLMObs(Service):
         return True
 
     def _llmobs_span_event(self, span: Span) -> Optional[LLMObsSpanEvent]:
-        """Assemble the LLMObs span event from the finalized meta_struct contents.
-
-        This function is a pure reader: all I/O mutations, user-processor hooks, and
-        meta-level finalization must already have been committed to
-        ``meta_struct`` by ``_prepare_llmobs_span_data``.
-        """
-        llmobs_data = _get_llmobs_data_metastruct(span)
-        if not llmobs_data:
-            return None
-
-        parent_id = llmobs_data.get(LLMOBS_STRUCT.PARENT_ID) or ROOT_PARENT_ID
-        llmobs_trace_id = llmobs_data.get(LLMOBS_STRUCT.TRACE_ID)
-        if llmobs_trace_id is None:
-            raise ValueError("Failed to extract LLMObs trace ID from span context.")
-
-        meta = llmobs_data.get(LLMOBS_STRUCT.META) or _Meta()
-        metrics = llmobs_data.get(LLMOBS_STRUCT.METRICS) or {}
-        tags = self._llmobs_tags(span)
-        _dd_attrs = {
-            **(llmobs_data.get("_dd") or {}),
-            "span_id": str(span.span_id),
-            "trace_id": format_trace_id(span.trace_id),
-            "apm_trace_id": format_trace_id(span.trace_id),
-        }
-
-        llmobs_span_event: LLMObsSpanEvent = {
-            "trace_id": llmobs_trace_id,
-            "span_id": str(span.span_id),
-            "parent_id": parent_id,
-            "name": get_llmobs_span_name(span) or span.name,
-            "start_ns": span.start_ns,
-            "duration": cast(int, span.duration_ns),
-            "status": "error" if span.error else "ok",
-            "meta": meta,
-            "metrics": metrics,
-            "tags": tags,
-            "_dd": _dd_attrs,
-        }
-
-        experiment_config = llmobs_data.get(LLMOBS_STRUCT.CONFIG)
-        if experiment_config:
-            llmobs_span_event["config"] = experiment_config
-        session_id = get_llmobs_session_id(span)
-        if session_id:
-            llmobs_span_event["session_id"] = session_id
-        span_links = get_llmobs_span_links(span) or []
-        if span_links:
-            llmobs_span_event["span_links"] = span_links
-
-        return llmobs_span_event
-
-    def _llmobs_tags(self, span: Span) -> list[str]:
-        tags = dict(get_llmobs_tags(span) or {})
-
-        if self._export_mode != LLMObsExportMode.APM_AGENTLESS:
-            tags["error"] = str(span.error)
-            err_type = span.get_tag(ERROR_TYPE)
-            if err_type:
-                tags["error_type"] = err_type
-
-        return sorted("{}:{}".format(k, v) for k, v in tags.items())
+        """Assemble the LLMObs span event from finalized meta_struct (see ``assemble_llmobs_span_event``)."""
+        return assemble_llmobs_span_event(span, self._export_mode)
 
     def _do_annotations(self, span: Span) -> None:
         # get the current span context
@@ -752,8 +672,10 @@ class LLMObs(Service):
             # Rebind the rescue processor: it captured the pre-fork writer whose worker
             # thread does not survive fork(); leaving it in place would silently buffer
             # rescued events in the child.
-            self.tracer._span_aggregator.llmobs_fallback_processor = LLMObsSamplingFallbackProcessor(
-                self._llmobs_span_writer
+            self.tracer._span_aggregator.llmobs_processor = LLMObsTraceProcessor(
+                self._llmobs_span_writer,
+                export_mode=self._export_mode,
+                suppress_apm_trace=True,
             )
             self._start_service()
 
@@ -904,10 +826,6 @@ class LLMObs(Service):
             # override the default _instance with a new tracer
             cls._instance = cls(tracer=_tracer, span_processor=span_processor)
 
-            # Add APM trace filter to drop all APM traces when DD_APM_TRACING_ENABLED is falsy
-            apm_filter = APMTracingEnabledFilter()
-            cls._instance.tracer._span_aggregator.dd_processors.append(apm_filter)
-
             cls.enabled = True
             # Align config._llmobs_enabled with effective state for user-initiated calls.
             # When _auto=True, the caller (RC handler, env-var auto-start) has already
@@ -923,8 +841,10 @@ class LLMObs(Service):
             else:
                 # Recreate the APM writer at v0.4; v0.5 strips meta_struct.
                 cls._instance.tracer._span_aggregator.reset(llmobs_enabled=True, reset_buffer=False)
-            cls._instance.tracer._span_aggregator.llmobs_fallback_processor = LLMObsSamplingFallbackProcessor(
-                cls._instance._llmobs_span_writer
+            cls._instance.tracer._span_aggregator.llmobs_processor = LLMObsTraceProcessor(
+                cls._instance._llmobs_span_writer,
+                export_mode=cls._instance._export_mode,
+                suppress_apm_trace=True,
             )
             cls._instance.start()
 
@@ -1648,7 +1568,7 @@ class LLMObs(Service):
         cls._instance.stop()
         if cls._instance._apm_writer_switched_to_agentless:
             cls._instance.tracer._span_aggregator.configure_agentless_writer(enable=False)
-        cls._instance.tracer._span_aggregator.llmobs_fallback_processor = _NoopTraceProcessor()
+        cls._instance.tracer._span_aggregator.llmobs_processor = _NoopTraceProcessor()
         cls.enabled = False
         # Align config._llmobs_enabled with effective state for user-initiated calls.
         # When _auto=True, the caller (RC handler) has already written _rc_value;

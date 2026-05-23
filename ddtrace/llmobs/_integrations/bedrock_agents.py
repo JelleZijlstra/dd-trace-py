@@ -157,8 +157,7 @@ def _propagate_inner_io_to_step_span(step_span: Span, inner_span: Span) -> None:
     """Copy first non-empty input and last output from inner_span onto step_span.
 
     MUST be called before inner_span.finish(): LLMObs may scrub meta_struct on the inner
-    span either at finish (LLMOBS_DIRECT) or later in the sampling fallback processor
-    (APM modes, on predicted-drop).
+    span at finish or later in ``LLMObsTraceProcessor`` (on DIRECT export or predicted-drop).
     """
     kwargs: dict[str, Any] = {}
     if not get_llmobs_input(step_span):
