@@ -1400,3 +1400,43 @@ def test_native_writer_stores_otlp_endpoint():
     """NativeWriter stores the otlp_endpoint when provided."""
     writer = NativeWriter("http://localhost:8126", otlp_endpoint="http://localhost:4318/v1/traces")
     assert writer._otlp_endpoint == "http://localhost:4318/v1/traces"
+
+
+@pytest.mark.subprocess(err=None)
+def test_buffered_trace_not_duplicated_across_fork():
+    """A trace buffered in the parent before fork() must be sent exactly once."""
+    import os
+
+    from ddtrace.internal.writer.writer import NativeWriter
+    from ddtrace.trace import Span
+    from ddtrace.trace import tracer
+
+    writer = NativeWriter("http://localhost:8126", processing_interval=1000)
+    read_fd, write_fd = os.pipe()
+
+    def send_payload(payload, count, client):
+        os.write(write_fd, b"x")
+
+    writer._send_payload = send_payload
+    tracer._span_aggregator.writer = writer
+
+    writer.write([Span(name="buffered-before-fork", trace_id=1, span_id=1)])
+
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+
+    # Parent flushes its buffer the way it normally would during runtime.
+    writer.flush_queue()
+
+    # Wait for the child so any flush it performed has reached the pipe before we read.
+    os.waitpid(pid, 0)
+    # Close the write end so the read returns EOF once buffered data is drained.
+    os.close(write_fd)
+
+    data = b""
+    while chunk := os.read(read_fd, 1024):
+        data += chunk
+    os.close(read_fd)
+
+    assert data == b"x", "trace was sent %d times instead of once: %r" % (len(data), data)
