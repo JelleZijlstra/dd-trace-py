@@ -313,6 +313,51 @@ class ProfilingConfigStack(DDConfig):
         private=True,
     )
 
+    adaptive_sampling_baseline = DDConfig.v(
+        float,
+        "adaptive_sampling.baseline",
+        default=0.0,
+        validator=validators.range(0, t.cast(int, float("inf"))),
+        help_type="Float",
+        help=(
+            "Absolute overhead floor for adaptive sampling, in core-percent units "
+            "(e.g. 1 = 0.01 core = 10 mcores ≈ 600 ms CPU/min). "
+            "Prevents the profiler from going silent on idle applications. "
+            "0 disables the floor (pure-ratio behaviour)."
+        ),
+        private=True,
+    )
+
+    adaptive_sampling_p_stable_window_s = DDConfig.v(
+        int,
+        "adaptive_sampling.p_stable_window_s",
+        default=600,
+        validator=validators.range(1, t.cast(int, float("inf"))),
+        help_type="Integer",
+        help=(
+            "Rolling window duration in seconds over which the stable app-CPU "
+            "percentile (p_stable) is computed for adaptive sampling. "
+            "Longer windows give a more stable sample rate at the cost of slower "
+            "adaptation to sustained load changes."
+        ),
+        private=True,
+    )
+
+    adaptive_sampling_p_stable_percentile = DDConfig.v(
+        float,
+        "adaptive_sampling.p_stable_percentile",
+        default=95.0,
+        validator=validators.range(0, 100),
+        help_type="Float",
+        help=(
+            "Percentile (0–100) of the rolling app-CPU window used as the stable "
+            "denominator in the adaptive sampling budget formula. "
+            "95 means the budget is based on the 95th-percentile CPU usage over "
+            "the last p_stable_window_s seconds."
+        ),
+        private=True,
+    )
+
     max_threads = DDConfig.v(
         int,
         "max_threads",
