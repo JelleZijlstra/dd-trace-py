@@ -306,10 +306,10 @@ class ProfilingConfigStack(DDConfig):
     adaptive_sampling_max_interval = DDConfig.v(
         int,
         "adaptive_sampling.max_interval_us",
-        default=1_000_000,
-        validator=validators.range(100, 1_000_000),
+        default=100_000,
+        validator=validators.range(100, 100_000),
         help_type="Integer",
-        help="Maximum sampling interval in microseconds for adaptive sampling.",
+        help="Maximum sampling interval in microseconds for adaptive sampling. Must be between 100us and 100ms.",
         private=True,
     )
 

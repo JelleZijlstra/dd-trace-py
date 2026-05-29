@@ -12,7 +12,7 @@ class TestAdaptiveSamplingConfig:
         config = ProfilingConfig()
         assert config.stack.adaptive_sampling is True
         assert config.stack.adaptive_sampling_target_overhead == 1.0
-        assert config.stack.adaptive_sampling_max_interval == 1_000_000
+        assert config.stack.adaptive_sampling_max_interval == 100_000
 
     def test_adaptive_sampling_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("_DD_PROFILING_STACK_ADAPTIVE_SAMPLING_ENABLED", "0")
