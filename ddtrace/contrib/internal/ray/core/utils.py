@@ -73,8 +73,11 @@ def _inject_context_in_env(context: Context) -> None:
     _TraceContext._inject(context, headers)
     # Environment variables are used as a process-boundary fallback channel for
     # context propagation when workers have no active in-process parent span.
-    env["traceparent"] = headers.get("traceparent", "")
-    env["tracestate"] = headers.get("tracestate", "")
+    traceparent = headers.get("traceparent")
+    tracestate = headers.get("tracestate")
+    if traceparent:
+        env["traceparent"] = traceparent
+        env["tracestate"] = tracestate or ""
 
 
 def _extract_tracing_context_from_env() -> Optional[Context]:
